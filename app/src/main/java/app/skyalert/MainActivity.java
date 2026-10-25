@@ -136,7 +136,7 @@ public class MainActivity extends Activity {
         root.setPadding(dp(20), dp(16), dp(20), dp(48));
         scroll.addView(root);
 
-        text(root, "skyalert", 28, true);
+        text(root, "Skyalert", 28, true);
         hint(root, "Alerts you when a rare Skycards aircraft enters your radar.");
         status = text(root, "", 15, false);
         status.setPadding(0, dp(12), 0, dp(8));
@@ -191,7 +191,7 @@ public class MainActivity extends Activity {
         hint(root, "With Follow my phone, the fixed location is used only as a backup.");
 
         section(root, "Reliability");
-        button(root, "Let skyalert run in the background (battery)", v -> requestBattery());
+        button(root, "Let Skyalert run in the background (battery)", v -> requestBattery());
         button(root, "Allow auto-start after reboot (location all the time)", v -> requestBackground());
 
         section(root, "Preview");
