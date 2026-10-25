@@ -17,7 +17,7 @@ public final class Notifier implements Tracker.Sink {
     static final String CH_ALERTS = "alerts";
     static final String CH_QUIET = "alerts_quiet";
     static final String CH_STATUS = "status";
-    static final String GROUP = "skyalert.aircraft";
+    static final String GROUP = ".aircraft";
     public static final int STATUS_ID = 1;
     static final int PAUSED_ID = 2;
 
@@ -41,7 +41,7 @@ public final class Notifier implements Tracker.Sink {
         NotificationChannel quiet = new NotificationChannel(CH_QUIET, "Live updates and quiet alerts", NotificationManager.IMPORTANCE_LOW);
         quiet.setDescription("Silent distance updates, re-entries, and quiet hours alerts");
         NotificationChannel status = new NotificationChannel(CH_STATUS, "Running status", NotificationManager.IMPORTANCE_MIN);
-        status.setDescription("Shows that skyalert is watching");
+        status.setDescription("Shows that Skyalert is watching");
         status.setShowBadge(false);
         nm.createNotificationChannel(alerts);
         nm.createNotificationChannel(quiet);
@@ -118,7 +118,7 @@ public final class Notifier implements Tracker.Sink {
         PendingIntent stopPi = PendingIntent.getService(ctx, 11, stop, flags());
         return new Notification.Builder(ctx, CH_STATUS)
                 .setSmallIcon(R.drawable.ic_stat_plane)
-                .setContentTitle("skyalert is watching")
+                .setContentTitle("Skyalert is watching")
                 .setContentText(text)
                 .setStyle(new Notification.BigTextStyle().bigText(text))
                 .setContentIntent(openApp)
@@ -140,7 +140,7 @@ public final class Notifier implements Tracker.Sink {
         PendingIntent pi = PendingIntent.getActivity(ctx, 12, app, flags());
         nm.notify(PAUSED_ID, new Notification.Builder(ctx, CH_QUIET)
                 .setSmallIcon(R.drawable.ic_stat_plane)
-                .setContentTitle("skyalert is paused")
+                .setContentTitle("Skyalert is paused")
                 .setContentText("Tap to resume watching for rare aircraft")
                 .setContentIntent(pi)
                 .setAutoCancel(true)
