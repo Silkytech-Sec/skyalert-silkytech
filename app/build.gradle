@@ -1,0 +1,48 @@
+plugins {
+    id "com.android.application"
+}
+
+android {
+    namespace "app.skyalert"
+    compileSdk 35
+
+    defaultConfig {
+        applicationId "app.skyalert"
+        minSdk 29
+        targetSdk 34
+        // CI passes the run number so every build can install over the last one
+        versionCode Integer.parseInt(System.getenv("VERSION_CODE") ?: "1")
+        versionName "1.0." + (System.getenv("VERSION_CODE") ?: "0")
+    }
+
+    signingConfigs {
+        release {
+            // All values come from GitHub Actions secrets. Nothing secret
+            // or default lives in this file, so the repo can be public.
+            def ks = System.getenv("SKYALERT_KEYSTORE")
+            if (ks) {
+                storeFile file(ks)
+                storePassword System.getenv("SKYALERT_STORE_PASSWORD")
+                keyAlias "skyalert"
+                keyPassword System.getenv("SKYALERT_KEY_PASSWORD")
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.release
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    lint {
+        abortOnError false
+        checkReleaseBuilds false
+    }
+}
