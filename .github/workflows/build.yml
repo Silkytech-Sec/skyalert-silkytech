@@ -1,0 +1,64 @@
+name: Build skyalert APK
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.11.1"
+
+      - name: Set up signing key
+        env:
+          KS: ${{ secrets.SKYALERT_KEYSTORE_B64 }}
+          SP: ${{ secrets.SKYALERT_STORE_PASSWORD }}
+          KP: ${{ secrets.SKYALERT_KEY_PASSWORD }}
+        run: |
+          if [ -z "$KS" ] || [ -z "$SP" ] || [ -z "$KP" ]; then
+            echo "::error::Missing signing secrets. Add SKYALERT_KEYSTORE_B64, SKYALERT_STORE_PASSWORD and SKYALERT_KEY_PASSWORD under Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+          echo "$KS" | base64 -d > "$RUNNER_TEMP/release.keystore"
+          echo "SKYALERT_KEYSTORE=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
+
+      - name: Build signed APK
+        env:
+          VERSION_CODE: ${{ github.run_number }}
+          SKYALERT_STORE_PASSWORD: ${{ secrets.SKYALERT_STORE_PASSWORD }}
+          SKYALERT_KEY_PASSWORD: ${{ secrets.SKYALERT_KEY_PASSWORD }}
+        run: |
+          gradle --no-daemon --stacktrace assembleRelease
+          cp app/build/outputs/apk/release/app-release.apk "skyalert-1.0.${{ github.run_number }}.apk"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: skyalert-apk
+          path: skyalert-*.apk
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v1.0.${{ github.run_number }}" skyalert-*.apk \
+            --title "skyalert 1.0.${{ github.run_number }}" \
+            --notes "Built from ${GITHUB_SHA::7}. Download the .apk below on your phone to install or update." \
+            --latest
