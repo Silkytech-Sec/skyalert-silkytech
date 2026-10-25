@@ -9,40 +9,12 @@ A native Android app that notifies you when an aircraft that is rare in Skycards
 - **Set and forget.** Quiet hours, a watch list, an ignore list, a fixed home location option, and auto-start after reboot.
 - **Hands off your account.** It never logs in to Skycards or touches your account.
 
-## Build it (no Android Studio needed)
-
-GitHub builds the APK for you on every push.
-
-1. Create a **private** repository on GitHub named `skyalert`. Keep it private, because it contains your signing key (see below).
-2. Push this folder to it. From a terminal in this folder, run the following.
-   ```sh
-   git init && git add . && git commit -m "skyalert"
-   git branch -M main
-   git remote add origin https://github.com/YOUR-USERNAME/skyalert.git
-   git push -u origin main
-   ```
-   With the GitHub CLI installed, `gh repo create skyalert --private --source . --push` does the same in one step.
-3. Open the repository's **Actions** tab and wait for **Build skyalert APK** to go green. It takes about four minutes.
-4. On your phone, open the repository's **Releases** page, download the `.apk`, and install it. Android will ask you to allow installs from your browser the first time.
-
-Every later push produces a new release that installs over the old one and keeps your settings.
-
-### Automatic updates (optional)
-
-[Obtainium](https://obtainium.imranr.dev) on F-Droid can watch your repository's releases and update the app for you. Private repositories need a GitHub personal access token, which you enter in Obtainium's settings.
-
-### Building locally instead
-
-Install Android Studio, open this folder, let it sync, then choose **Build, Build App Bundle(s) / APK(s), Build APK(s)**. You can also install Gradle 8.11.1 and JDK 17 and run `gradle assembleRelease`. The APK lands in `app/build/outputs/apk/release/`.
-
 ## First run on your phone
 
 1. Open skyalert and tap **Start watching**. Allow notifications and location.
 2. Android then asks to let skyalert ignore battery optimization. Allow it, or alerts can stall when the screen is off.
 3. Tap **Show what's in range** to see every aircraft in your radar, sorted by rarity, with `*` marking anything that would alert. Adjust **Minimum rarity** until the stars look right. The default of 8.0 is roughly every Ultra card.
 4. Optional. Tap **Allow auto-start after reboot** and choose **Allow all the time**. Without it, skyalert shows a tap-to-resume reminder after a reboot instead of restarting on its own. Using a fixed location also avoids needing this.
-
-If you were running the Termux version, stop it with `~/skyalert/stop.sh` and delete `~/.termux/boot/skyalert` so you don't get double alerts.
 
 ## Notification settings
 
@@ -57,18 +29,6 @@ skyalert creates three notification channels you can tune in Android's settings.
 ## Privacy
 
 Your position is rounded to about 1 km before it is sent to the traffic API, and the precise distance is computed on the phone. The only network requests go to adsb.lol, adsb.fi, and the Skycards model list. Nothing else leaves your phone.
-
-## About the signing key
-
-`app/skyalert.keystore` is a key generated just for you. Android only installs an update if it is signed with the same key as the installed app, so keep this file. Anyone holding it could sign an app that installs as an update over yours, which is why the repository should stay private.
-
-If you'd rather keep the repository public, store the key as a secret instead.
-
-1. Run `base64 -i app/skyalert.keystore | pbcopy` on your Mac.
-2. Add the copied text as a repository secret named `SKYALERT_KEYSTORE_B64`, under Settings, Secrets and variables, Actions.
-3. Delete the keystore file from the repository.
-
-The workflow uses the secret automatically when it's present.
 
 ## Limitations
 
