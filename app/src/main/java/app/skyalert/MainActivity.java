@@ -189,7 +189,11 @@ public class MainActivity extends Activity {
         lon = field(root, "Longitude", "-80.52", signed);
         button(root, "Fill in my current location", v -> fillCurrentLocation());
         hint(root, "With Follow my phone, the fixed location is used only as a backup.");
-
+        
+        section(root, "Airport watchlist");
+        hint(root, "Also watch airports, or any other place, besides your own location.");
+        button(root, "Manage watchlist", v -> startActivity(new Intent(this, WatchlistActivity.class)));
+        
         section(root, "Reliability");
         button(root, "Let Skyalert run in the background (battery)", v -> requestBattery());
         button(root, "Allow auto-start after reboot (location all the time)", v -> requestBackground());
