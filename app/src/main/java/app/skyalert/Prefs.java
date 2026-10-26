@@ -10,6 +10,7 @@ import java.util.Locale;
 
 import app.skyalert.core.QuietHours;
 import app.skyalert.core.Settings;
+import app.skyalert.core.Watchlist;
 
 /** SharedPreferences keys, defaults, and mapping to core Settings. */
 public final class Prefs {
@@ -36,6 +37,8 @@ public final class Prefs {
     public static final String STATUS = "status";
     public static final String STATUS_TIME = "status_time";
     public static final String LOG = "log";
+    public static final String WATCH_HOME = "watch_home";
+    public static final String WATCHLIST = "watchlist";
 
     private Prefs() {}
 
@@ -69,7 +72,17 @@ public final class Prefs {
         String q = p.getString(QUIET_HOURS, "");
         s.quietHours = QuietHours.parseOrNull(q) == null ? "" : q;
         s.quietPause = p.getBoolean(QUIET_PAUSE, false);
+        s.watchHome = p.getBoolean(WATCH_HOME, true);
+        s.watchlist = Watchlist.decode(p.getString(WATCHLIST, ""));
         return s;
+    }
+
+    public static List<Watchlist.Entry> watchlist(Context c) {
+        return Watchlist.decode(get(c).getString(WATCHLIST, ""));
+    }
+
+    public static void saveWatchlist(Context c, List<Watchlist.Entry> list) {
+        get(c).edit().putString(WATCHLIST, Watchlist.encode(list)).apply();
     }
 
     static double clamp(double v, double lo, double hi) {

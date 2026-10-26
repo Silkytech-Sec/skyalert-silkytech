@@ -14,9 +14,14 @@ import android.util.Log;
 import java.text.SimpleDateFormat;
 import java.util.Calendar;
 import java.util.Date;
+import java.util.HashSet;
+import java.util.Iterator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 import app.skyalert.core.Http;
 import app.skyalert.core.Logger;
@@ -25,27 +30,42 @@ import app.skyalert.core.QuietHours;
 import app.skyalert.core.Settings;
 import app.skyalert.core.Tracker;
 import app.skyalert.core.Traffic;
+import app.skyalert.core.WatchPlan;
+import app.skyalert.core.Watchlist;
 
-/** Foreground service that polls live traffic and raises alerts. */
+/**
+ * Foreground service that polls live traffic and raises alerts. It takes turns
+ * checking your own position and each watchlist place, one place per check,
+ * and keeps a separate alert tracker for every place.
+ */
 public class WatcherService extends Service {
     public static final String ACTION_STOP = "app.skyalert.STOP";
     public static final String ACTION_DISMISS = "app.skyalert.DISMISS";
     public static final String EXTRA_HEX = "hex";
+    public static final String EXTRA_LOC = "loc";
     static final String TAG = "skyalert";
 
     static volatile boolean running;
+    private static volatile WatcherService instance;
 
     private volatile boolean loop;
     private Thread worker;
     private PowerManager.WakeLock wakeLock;
     private Notifier notifier;
-    private Tracker tracker;
+    private final Map<String, Tracker> trackers = new ConcurrentHashMap<>();
     private ModelDb models;
     private Traffic traffic;
     private LocationWatcher location;
     private String locationMode = "";
     private int failures;
+    private int cursor;
     private Logger logger;
+
+    // Worker thread only: the latest status line for each place.
+    private final Map<String, String> lines = new LinkedHashMap<>();
+
+    private final Object sleepLock = new Object();
+    private boolean wakeRequested;
 
     public static boolean isRunning() {
         return running;
@@ -55,9 +75,35 @@ public class WatcherService extends Service {
         c.startForegroundService(new Intent(c, WatcherService.class));
     }
 
+    /** Ask a running service to re-read its settings and check again right away. */
+    public static void nudge() {
+        WatcherService s = instance;
+        if (s != null) s.requestPoll();
+    }
+
+    private void requestPoll() {
+        synchronized (sleepLock) {
+            wakeRequested = true;
+            sleepLock.notifyAll();
+        }
+    }
+
+    private void sleepFor(long ms) throws InterruptedException {
+        long end = System.currentTimeMillis() + ms;
+        synchronized (sleepLock) {
+            while (!wakeRequested) {
+                long left = end - System.currentTimeMillis();
+                if (left <= 0) break;
+                sleepLock.wait(left);
+            }
+            wakeRequested = false;
+        }
+    }
+
     @Override
     public void onCreate() {
         super.onCreate();
+        instance = this;
         final Context app = getApplicationContext();
         logger = m -> {
             Log.i(TAG, m);
@@ -67,7 +113,6 @@ public class WatcherService extends Service {
         Http http = new Http();
         models = new ModelDb(getFilesDir(), http, logger, 24 * 3600_000L);
         traffic = new Traffic(http);
-        tracker = new Tracker(notifier, logger);
         location = new LocationWatcher(this);
         PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
         wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "skyalert:poll");
@@ -85,7 +130,9 @@ public class WatcherService extends Service {
         }
         if (ACTION_DISMISS.equals(action)) {
             String hex = intent.getStringExtra(EXTRA_HEX);
-            if (hex != null) tracker.dismiss(hex);
+            String loc = intent.getStringExtra(EXTRA_LOC);
+            Tracker t = trackers.get(loc == null ? WatchPlan.HOME : loc);
+            if (hex != null && t != null) t.dismiss(hex);
             if (!loop) stopSelf();
             return START_STICKY;
         }
@@ -107,7 +154,7 @@ public class WatcherService extends Service {
             goForegroundUnsafe();
             return true;
         } catch (RuntimeException e) {
-            logger.log("Android blocked a background restart. Open skyalert to resume.");
+            logger.log("Android blocked a background restart. Open Skyalert to resume.");
             notifier.pausedAfterBoot();
             return false;
         }
@@ -168,6 +215,56 @@ public class WatcherService extends Service {
         if (loop) notifier.updateStatus(full);
     }
 
+    /** Drops trackers (and their notifications) for places that are no longer wanted. */
+    private void pruneTrackers(Settings cfg) {
+        Set<String> wanted = new HashSet<>();
+        if (cfg.watchHome) wanted.add(WatchPlan.HOME);
+        for (Watchlist.Entry e : cfg.watchlist) wanted.add(e.key());
+        Iterator<Map.Entry<String, Tracker>> it = trackers.entrySet().iterator();
+        while (it.hasNext()) {
+            Map.Entry<String, Tracker> en = it.next();
+            if (!wanted.contains(en.getKey())) {
+                en.getValue().clearAll();
+                it.remove();
+            }
+        }
+        lines.keySet().retainAll(wanted);
+    }
+
+    private Tracker trackerFor(final WatchPlan.Target t) {
+        Tracker existing = trackers.get(t.key);
+        if (existing != null) return existing;
+        Logger lg = t.isHome() ? logger : m -> logger.log(t.label + ": " + m);
+        Tracker created = new Tracker(notifier.sinkFor(t.key, t.isHome() ? null : t.label), lg);
+        trackers.put(t.key, created);
+        return created;
+    }
+
+    private String idleMessage(Settings cfg) {
+        if (!cfg.watchHome && cfg.watchlist.isEmpty()) return "Nothing to watch. Add a place or turn on My location.";
+        return LocationWatcher.hasPermission(this)
+                ? "Waiting for a location fix"
+                : "No location permission. Open Skyalert to fix";
+    }
+
+    private void reportStatus(List<WatchPlan.Target> targets, WatchPlan.Target t, Tracker.Summary sum, boolean quiet) {
+        if (targets.size() == 1) {
+            lines.clear();
+            status(sum.text(t.radiusKm, traffic.lastSource, quiet));
+            return;
+        }
+        lines.put(t.key, t.label + ": " + sum.inRange + " in range, " + sum.active + (sum.active == 1 ? " alert" : " alerts"));
+        StringBuilder b = new StringBuilder();
+        for (WatchPlan.Target x : targets) {
+            String l = lines.get(x.key);
+            if (l == null) continue;
+            if (b.length() > 0) b.append('\n');
+            b.append(l);
+        }
+        if (quiet) b.append(" | quiet hours");
+        status(b.toString());
+    }
+
     private void runLoop() {
         while (loop) {
             long start = System.currentTimeMillis();
@@ -179,26 +276,28 @@ public class WatcherService extends Service {
                 QuietHours q = QuietHours.parseOrNull(cfg.quietHours);
                 boolean quiet = q != null && q.contains(cal.get(Calendar.HOUR_OF_DAY) * 60 + cal.get(Calendar.MINUTE));
                 ensureLocation(p);
+                pruneTrackers(cfg);
+                List<WatchPlan.Target> targets = WatchPlan.targets(cfg.watchHome, here(p), cfg.radiusKm, cfg.watchlist);
                 if (quiet && cfg.quietPause) {
                     status("Paused for quiet hours");
                     delay = cfg.pollSeconds * 1000L;
+                } else if (targets.isEmpty()) {
+                    status(idleMessage(cfg));
+                    delay = 30_000L;
                 } else {
                     if (models.size() == 0) models.load(false);
                     else models.maybeRefresh();
-                    double[] here = here(p);
-                    if (here == null) {
-                        status(LocationWatcher.hasPermission(this)
-                                ? "Waiting for a location fix"
-                                : "No location permission. Open skyalert to fix");
-                        delay = 30_000L;
-                    } else {
-                        List<Map<String, Object>> ac = traffic.fetch(here[0], here[1], cfg.radiusKm, cfg.queryDecimals);
-                        Tracker.Summary sum = tracker.tick(ac, here[0], here[1], cfg, models,
-                                System.currentTimeMillis(), quiet, cfg.pollSeconds);
-                        status(sum.text(cfg.radiusKm, traffic.lastSource, quiet));
-                        failures = 0;
-                        delay = cfg.pollSeconds * 1000L;
-                    }
+                    int n = targets.size();
+                    int idx = cursor % n;
+                    cursor = idx + 1;
+                    WatchPlan.Target t = targets.get(idx);
+                    cfg.radiusKm = t.radiusKm;
+                    List<Map<String, Object>> ac = traffic.fetch(t.lat, t.lon, t.radiusKm, cfg.queryDecimals);
+                    Tracker.Summary sum = trackerFor(t).tick(ac, t.lat, t.lon, cfg, models,
+                            System.currentTimeMillis(), quiet, WatchPlan.perLocationSeconds(cfg.pollSeconds, n));
+                    reportStatus(targets, t, sum, quiet);
+                    failures = 0;
+                    delay = WatchPlan.stepMs(cfg.pollSeconds, n);
                 }
             } catch (Exception e) {
                 failures++;
@@ -208,7 +307,7 @@ public class WatcherService extends Service {
             }
             long sleep = Math.max(1000L, delay - (System.currentTimeMillis() - start));
             try {
-                Thread.sleep(sleep);
+                sleepFor(sleep);
             } catch (InterruptedException e) {
                 break;
             }
@@ -219,9 +318,11 @@ public class WatcherService extends Service {
     public void onDestroy() {
         loop = false;
         running = false;
+        instance = null;
         if (worker != null) worker.interrupt();
         location.stop();
-        tracker.clearAll();
+        for (Tracker t : trackers.values()) t.clearAll();
+        trackers.clear();
         if (wakeLock.isHeld()) wakeLock.release();
         Prefs.get(this).edit().putString(Prefs.STATUS, "Stopped").apply();
         stopForeground(STOP_FOREGROUND_REMOVE);
