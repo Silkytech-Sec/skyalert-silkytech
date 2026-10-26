@@ -1,6 +1,8 @@
 package app.skyalert.core;
 
+import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Locale;
 import java.util.Set;
 
@@ -29,6 +31,11 @@ public final class Settings {
     public boolean clearWhenGone = true;
     public String quietHours = "";
     public boolean quietPause = false;
+
+    /** Watch the phone's own position (or the fixed home location) as well as the watchlist. */
+    public boolean watchHome = true;
+    /** Extra places (airports etc.), checked in turn with the home position. */
+    public List<Watchlist.Entry> watchlist = new ArrayList<>();
 
     public static Set<String> codes(String text) {
         Set<String> out = new HashSet<>();
