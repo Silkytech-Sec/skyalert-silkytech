@@ -36,7 +36,10 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-
+        <activity
+            android:name=".WatchlistActivity"
+            android:exported="false"
+            android:label="Airport watchlist" /> 
         <service
             android:name=".WatcherService"
             android:exported="false"
