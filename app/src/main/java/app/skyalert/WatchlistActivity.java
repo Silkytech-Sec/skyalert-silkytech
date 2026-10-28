@@ -9,6 +9,7 @@ import android.text.InputType;
 import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.MenuItem;
+import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Button;
 import android.widget.CheckBox;
@@ -18,9 +19,11 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 
+import app.skyalert.core.AirportLookup;
 import app.skyalert.core.Watchlist;
 
 /** Add and remove the airports (or any places) that are watched in addition to your own position. */
@@ -93,7 +96,7 @@ public class WatchlistActivity extends Activity {
         add.setOnClickListener(v -> showAddDialog());
         root.addView(add, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        TextView tip = text(root, "Tip: in a maps app, long-press an airport to see its coordinates. "
+        TextView tip = text(root, "Type an airport's ICAO code (like EGLL) or IATA code (like LHR). "
                 + "Each place uses its own radius, and the radius on the main screen is used for your own location.", 13, false);
         tip.setAlpha(0.7f);
 
@@ -125,6 +128,7 @@ public class WatchlistActivity extends Activity {
             LinearLayout info = new LinearLayout(this);
             info.setOrientation(LinearLayout.VERTICAL);
             text(info, e.name, 16, true);
+            if (!e.note.isEmpty()) text(info, e.note, 14, false);
             TextView detail = text(info, e.describe(), 13, false);
             detail.setAlpha(0.7f);
             row.addView(info, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1));
@@ -162,35 +166,116 @@ public class WatchlistActivity extends Activity {
         box.setOrientation(LinearLayout.VERTICAL);
         box.setPadding(dp(20), dp(8), dp(20), dp(8));
         sv.addView(box);
-        final EditText name = field(box, "Name", "for example Heathrow", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
-        final EditText lat = field(box, "Latitude", "51.4700", signed);
-        final EditText lon = field(box, "Longitude", "-0.4543", signed);
-        final EditText radius = field(box, "Radius in km (blank for " + (int) Watchlist.DEFAULT_RADIUS_KM + ")", String.valueOf((int) Watchlist.DEFAULT_RADIUS_KM), num);
 
+        // Airport mode: just a code.
+        final LinearLayout airportBox = new LinearLayout(this);
+        airportBox.setOrientation(LinearLayout.VERTICAL);
+        box.addView(airportBox);
+        final EditText code = field(airportBox, "Airport code", "EGLL or LHR",
+                InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+
+        // Manual mode: any other place, by coordinates.
+        final LinearLayout manualBox = new LinearLayout(this);
+        manualBox.setOrientation(LinearLayout.VERTICAL);
+        manualBox.setVisibility(View.GONE);
+        box.addView(manualBox);
+        final EditText name = field(manualBox, "Name", "for example My cabin", InputType.TYPE_CLASS_TEXT);
+        final EditText lat = field(manualBox, "Latitude", "51.4700", signed);
+        final EditText lon = field(manualBox, "Longitude", "-0.4543", signed);
+
+        final EditText radius = field(box, "Radius in km (blank for " + (int) Watchlist.DEFAULT_RADIUS_KM + ")",
+                String.valueOf((int) Watchlist.DEFAULT_RADIUS_KM), num);
+
+        final CheckBox manual = new CheckBox(this);
+        manual.setText("Not an airport? Enter coordinates instead");
+        manual.setOnCheckedChangeListener((b, on) -> {
+            airportBox.setVisibility(on ? View.GONE : View.VISIBLE);
+            manualBox.setVisibility(on ? View.VISIBLE : View.GONE);
+        });
+        box.addView(manual);
+
+        final TextView message = text(box, "", 13, false);
+
+        final boolean[] cancelled = {false};
         final AlertDialog dialog = new AlertDialog.Builder(this)
                 .setTitle("Add a place")
                 .setView(sv)
                 .setPositiveButton("Add", null)
                 .setNegativeButton("Cancel", null)
                 .create();
+        dialog.setOnDismissListener(d -> cancelled[0] = true);
         dialog.show();
+        final Button addButton = dialog.getButton(AlertDialog.BUTTON_POSITIVE);
         // Set the click handler after show() so a bad entry keeps the dialog open.
-        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v -> {
+        addButton.setOnClickListener(v -> {
             try {
-                Watchlist.Entry e = Watchlist.Entry.fromInput(
-                        name.getText().toString(), lat.getText().toString(),
-                        lon.getText().toString(), radius.getText().toString());
-                for (Watchlist.Entry x : items) {
-                    if (x.key().equals(e.key())) throw new IllegalArgumentException("That location is already in the list");
+                final double radiusKm = Watchlist.parseRadius(radius.getText().toString());
+                if (manual.isChecked()) {
+                    Watchlist.Entry e = Watchlist.Entry.fromInput(
+                            name.getText().toString(), lat.getText().toString(),
+                            lon.getText().toString(), radius.getText().toString());
+                    if (addEntry(e)) dialog.dismiss();
+                    return;
                 }
-                if (items.size() >= Watchlist.MAX) throw new IllegalArgumentException("The list is full");
-                items.add(e);
-                save();
-                render();
-                dialog.dismiss();
+                final String wanted = AirportLookup.normalize(code.getText().toString());
+                for (Watchlist.Entry x : items) {
+                    if (x.name.equals(wanted)) throw new IllegalArgumentException(wanted + " is already in the list");
+                }
+                addButton.setEnabled(false);
+                message.setText("Looking up " + wanted + "... (downloads the public airport list, a few MB)");
+                new Thread(() -> {
+                    AirportLookup.Result found = null;
+                    String problem = null;
+                    try {
+                        found = AirportLookup.lookup(wanted, () -> cancelled[0]);
+                        if (found == null) problem = "No airport found with the code " + wanted
+                                + ". Check the code, or tick the box below to enter coordinates.";
+                    } catch (IOException | RuntimeException ex) {
+                        problem = "Couldn't get the airport list (" + ex.getMessage()
+                                + "). Check your connection, or tick the box below to enter coordinates.";
+                    }
+                    final AirportLookup.Result result = found;
+                    final String err = problem;
+                    runOnUiThread(() -> {
+                        if (cancelled[0] || isFinishing()) return;
+                        if (result == null) {
+                            message.setText(err);
+                            addButton.setEnabled(true);
+                            return;
+                        }
+                        try {
+                            if (addEntry(Watchlist.Entry.of(result.code, result.name, result.lat, result.lon, radiusKm))) {
+                                dialog.dismiss();
+                            } else {
+                                addButton.setEnabled(true);
+                            }
+                        } catch (IllegalArgumentException ex) {
+                            message.setText(ex.getMessage());
+                            addButton.setEnabled(true);
+                        }
+                    });
+                }, "airport-lookup").start();
             } catch (IllegalArgumentException ex) {
                 Toast.makeText(this, ex.getMessage(), Toast.LENGTH_SHORT).show();
             }
         });
+    }
+
+    /** Adds an entry unless it is a duplicate or the list is full. Returns true if it was added. */
+    private boolean addEntry(Watchlist.Entry e) {
+        for (Watchlist.Entry x : items) {
+            if (x.key().equals(e.key())) {
+                Toast.makeText(this, "That location is already in the list", Toast.LENGTH_SHORT).show();
+                return false;
+            }
+        }
+        if (items.size() >= Watchlist.MAX) {
+            Toast.makeText(this, "The list is full", Toast.LENGTH_SHORT).show();
+            return false;
+        }
+        items.add(e);
+        save();
+        render();
+        return true;
     }
 }
