@@ -17,26 +17,33 @@ public final class Watchlist {
     /** One place to watch. Always valid: the only ways to make one check the ranges. */
     public static final class Entry {
         public final String name;
+        /** Optional longer description, such as the full airport name. May be empty. */
+        public final String note;
         public final double lat;
         public final double lon;
         public final double radiusKm;
 
-        private Entry(String name, double lat, double lon, double radiusKm) {
+        private Entry(String name, String note, double lat, double lon, double radiusKm) {
             this.name = name;
+            this.note = note;
             this.lat = lat;
             this.lon = lon;
             this.radiusKm = radiusKm;
         }
 
-        /** Builds an entry from numbers. Throws IllegalArgumentException with a readable message. */
         public static Entry of(String rawName, double lat, double lon, double radiusKm) {
+            return of(rawName, "", lat, lon, radiusKm);
+        }
+
+        /** Builds an entry from numbers. Throws IllegalArgumentException with a readable message. */
+        public static Entry of(String rawName, String rawNote, double lat, double lon, double radiusKm) {
             String name = cleanName(rawName);
             if (name.isEmpty()) throw new IllegalArgumentException("Give the place a name");
             if (!(Math.abs(lat) <= 90)) throw new IllegalArgumentException("Latitude must be between -90 and 90");
             if (!(Math.abs(lon) <= 180)) throw new IllegalArgumentException("Longitude must be between -180 and 180");
             if (!(radiusKm >= MIN_RADIUS_KM && radiusKm <= MAX_RADIUS_KM))
                 throw new IllegalArgumentException("Radius must be between 5 and 460 km");
-            return new Entry(name, lat, lon, radiusKm);
+            return new Entry(name, cleanNote(rawNote), lat, lon, radiusKm);
         }
 
         /** Builds an entry from text fields. A blank radius means the default. */
@@ -45,6 +52,11 @@ public final class Watchlist {
             double lo = number(lon, "longitude");
             double r = radius == null || radius.trim().isEmpty() ? DEFAULT_RADIUS_KM : number(radius, "radius");
             return of(name, la, lo, r);
+        }
+
+        /** Builds an entry from a successful airport lookup. A blank radius means the default. */
+        public static Entry fromAirport(AirportLookup.Result r, String radius) {
+            return of(r.code, r.name, r.lat, r.lon, parseRadius(radius));
         }
 
         /** Stable identity used for the per-place tracker and notification ids. */
@@ -58,6 +70,14 @@ public final class Watchlist {
         }
     }
 
+    /** Reads a radius field. Blank means the default. */
+    public static double parseRadius(String radius) {
+        double r = radius == null || radius.trim().isEmpty() ? DEFAULT_RADIUS_KM : number(radius, "radius");
+        if (!(r >= MIN_RADIUS_KM && r <= MAX_RADIUS_KM))
+            throw new IllegalArgumentException("Radius must be between 5 and 460 km");
+        return r;
+    }
+
     private static double number(String s, String what) {
         String t = s == null ? "" : s.trim();
         if (t.isEmpty()) throw new IllegalArgumentException("Enter a " + what);
@@ -68,18 +88,25 @@ public final class Watchlist {
         }
     }
 
+    static String cleanNote(String raw) {
+        if (raw == null) return "";
+        String s = raw.replaceAll("\\p{Cntrl}", " ").replaceAll("\\s+", " ").trim();
+        return s.length() > 60 ? s.substring(0, 60).trim() : s;
+    }
+
     static String cleanName(String raw) {
         if (raw == null) return "";
         String s = raw.replaceAll("\\p{Cntrl}", " ").replaceAll("\\s+", " ").trim();
         return s.length() > MAX_NAME ? s.substring(0, MAX_NAME).trim() : s;
     }
 
-    /** One entry per line, fields separated by tabs. Names can't contain either. */
+    /** One entry per line, fields separated by tabs. Names and notes can't contain either. */
     public static String encode(List<Entry> list) {
         StringBuilder b = new StringBuilder();
         for (Entry e : list) {
             if (b.length() > 0) b.append('\n');
-            b.append(e.name).append('\t').append(e.lat).append('\t').append(e.lon).append('\t').append(e.radiusKm);
+            b.append(e.name).append('\t').append(e.lat).append('\t').append(e.lon).append('\t').append(e.radiusKm)
+                    .append('\t').append(e.note);
         }
         return b.toString();
     }
@@ -91,9 +118,10 @@ public final class Watchlist {
         for (String line : text.split("\n")) {
             if (out.size() >= MAX) break;
             String[] p = line.split("\t", -1);
-            if (p.length != 4) continue;
+            if (p.length != 4 && p.length != 5) continue; // 4 = saved by the first version, no note
             try {
-                Entry e = Entry.of(p[0], Double.parseDouble(p[1]), Double.parseDouble(p[2]), Double.parseDouble(p[3]));
+                Entry e = Entry.of(p[0], p.length == 5 ? p[4] : "", Double.parseDouble(p[1]),
+                        Double.parseDouble(p[2]), Double.parseDouble(p[3]));
                 boolean dup = false;
                 for (Entry x : out) if (x.key().equals(e.key())) dup = true;
                 if (!dup) out.add(e);
